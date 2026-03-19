@@ -34,6 +34,13 @@ from areal.mixed_attn import (
     save_adapter_weight,
 )
 from areal.mixed_attn.loss import reg_loss_fn
+from areal.semantic_kv import (
+    collect_semantic_kv_training_states,
+    enable_semantic_kv_training,
+    load_semantic_kv_weight,
+    save_semantic_kv_weight,
+    semantic_cluster_loss_fn,
+)
 from areal.models.transformers.ulyssess_patch import apply_monkey_patch
 from areal.platforms import current_platform
 from areal.utils import datapack, logging, name_resolve, names, pkg_version
@@ -132,6 +139,7 @@ class FSDPEngine(BaseHFEngine):
 
         self.logger.info(f"Data parallel head {self.dp_head} and rank {self.dp_rank}")
         self.enable_mixed_attn_training = self.config.enable_mixed_attn_training
+        self.enable_semantic_kv_training = self.config.enable_semantic_kv_training
 
     def initialize(self, addr: str | None, ft_spec: FinetuneSpec | None):
         # Initialize distributed enviroments and load model.
@@ -153,8 +161,15 @@ class FSDPEngine(BaseHFEngine):
         if self.config.use_lora:
             self._apply_peft_wrapper()
 
+        if self.enable_mixed_attn_training and self.enable_semantic_kv_training:
+            raise ValueError(
+                "enable_mixed_attn_training and enable_semantic_kv_training are mutually exclusive."
+            )
+
         if self.enable_mixed_attn_training:
             self._apply_mixed_attention_wrapper()
+        elif self.enable_semantic_kv_training:
+            self._apply_semantic_kv_wrapper()
 
         # sharding_strategy = ShardingStrategy.FULL_SHARD
         # Simple auto wrap policy
@@ -238,6 +253,8 @@ class FSDPEngine(BaseHFEngine):
             # add by Wenjie
             if self.enable_mixed_attn_training:
                 save_adapter_weight(self.model.config._name_or_path, state_dict, path)
+            elif self.enable_semantic_kv_training:
+                save_semantic_kv_weight(self.model, state_dict, path)
             else:
                 os.makedirs(path, exist_ok=True)
                 self.model.save_pretrained(path, state_dict=state_dict)
@@ -261,6 +278,14 @@ class FSDPEngine(BaseHFEngine):
                     )
                 full_state = get_state_dict_from_repo_id_or_path(model_name)
                 full_state.update(adapter_weight_dict)
+            elif self.enable_semantic_kv_training:
+                model_name, semantic_kv_state_dict, _ = load_semantic_kv_weight(path)
+                if model_name != self.model.config._name_or_path:
+                    raise ValueError(
+                        f"Model name mismatch: {model_name} vs {self.model.config._name_or_path}"
+                    )
+                full_state = get_state_dict_from_repo_id_or_path(model_name)
+                full_state.update(semantic_kv_state_dict)
             else:
                 full_state = get_state_dict_from_repo_id_or_path(path)
         else:
@@ -315,6 +340,24 @@ class FSDPEngine(BaseHFEngine):
                 param.requires_grad = True
                 if self.rank == 0:
                     self.logger.info(f"Training adapter weight: {name}")
+            else:
+                param.requires_grad = False
+
+    def _apply_semantic_kv_wrapper(self):
+        enable_semantic_kv_training(
+            self.model,
+            low_rank_dim=self.config.semantic_kv_rank,
+            budget_ratio=self.config.semantic_kv_budget_ratio,
+            sink_window_size=self.config.semantic_kv_sink_window_size,
+            recent_window_size=self.config.semantic_kv_recent_window_size,
+            ulysses_sp_size=self.parallel_helper.sp_size,
+        )
+
+        for name, param in self.model.named_parameters():
+            if "semantic_kv" in name:
+                param.requires_grad = True
+                if self.rank == 0:
+                    self.logger.info(f"Training semantic_kv weight: {name}")
             else:
                 param.requires_grad = False
 
@@ -398,6 +441,8 @@ class FSDPEngine(BaseHFEngine):
             # add by Wenjie
             if self.enable_mixed_attn_training and "adapter" not in name:
                 # only collect adapter weights
+                continue
+            if self.enable_semantic_kv_training and "semantic_kv" not in name:
                 continue
             if isinstance(param.data, DTensor):
                 tensor = param.data.full_tensor()
@@ -512,6 +557,17 @@ class FSDPEngine(BaseHFEngine):
                 ).float()
 
                 loss += self.config.reg_loss_scale * reg_loss
+            elif self.enable_semantic_kv_training:
+                semantic_states = collect_semantic_kv_training_states(self.model)
+                if semantic_states:
+                    cluster_loss = semantic_cluster_loss_fn(
+                        semantic_states,
+                        temperature=self.config.semantic_kv_cluster_temperature,
+                    ).float()
+                else:
+                    cluster_loss = torch.zeros((), device=logits.device)
+
+                loss += self.config.semantic_kv_cluster_loss_scale * cluster_loss
 
             loss_scale = loss_weight_fn(mb_input) / total_loss_weight
 

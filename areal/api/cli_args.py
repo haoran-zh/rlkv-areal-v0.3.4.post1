@@ -452,6 +452,37 @@ class PPOActorConfig(TrainEngineConfig):
             "help": "Initial value for the adapter weights in mixed attention training."
         },
     )
+    enable_semantic_kv_training: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable the semantic-KV projector scaffold. "
+            "This disables head gating and trains per-layer low-rank projectors instead."
+        },
+    )
+    semantic_kv_rank: int = field(
+        default=32,
+        metadata={"help": "Low-rank dimension for each semantic-KV projector."},
+    )
+    semantic_kv_budget_ratio: float = field(
+        default=0.5,
+        metadata={"help": "Budget ratio used by semantic-KV token selection."},
+    )
+    semantic_kv_sink_window_size: int = field(
+        default=16,
+        metadata={"help": "Number of sink tokens always retained by semantic-KV."},
+    )
+    semantic_kv_recent_window_size: int = field(
+        default=64,
+        metadata={"help": "Number of recent tokens always retained by semantic-KV."},
+    )
+    semantic_kv_cluster_loss_scale: float = field(
+        default=0.1,
+        metadata={"help": "Weight for the semantic-KV clustering regularizer."},
+    )
+    semantic_kv_cluster_temperature: float = field(
+        default=0.1,
+        metadata={"help": "Temperature for the soft clustering assignments."},
+    )
 
 
 @dataclass
@@ -623,6 +654,9 @@ class SGLangConfig:
     recent_window_size: int = 32
     adapter_load_path: Optional[str] = None
     adapter_init_value: float = 1.0
+    enable_semantic_kv: bool = False
+    semantic_kv_rank: int = 32
+    semantic_kv_load_path: Optional[str] = None
 
     # Use staticmethod to make OmegaConf happy.
     @staticmethod

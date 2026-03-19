@@ -76,6 +76,7 @@ class BaseHFEngine(TrainEngine):
         self.world_size = int(os.environ["WORLD_SIZE"])
 
         self.enable_mixed_attn_training = self.config.enable_mixed_attn_training
+        self.enable_semantic_kv_training = self.config.enable_semantic_kv_training
 
     def set_version(self, version: int):
         self._version = version
