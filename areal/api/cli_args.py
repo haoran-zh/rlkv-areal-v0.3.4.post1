@@ -475,6 +475,12 @@ class PPOActorConfig(TrainEngineConfig):
         default=64,
         metadata={"help": "Number of recent tokens always retained by semantic-KV."},
     )
+    semantic_kv_selector_temperature: float = field(
+        default=1.0,
+        metadata={
+            "help": "Temperature of the straight-through semantic-KV selector."
+        },
+    )
     semantic_kv_cluster_loss_scale: float = field(
         default=0.1,
         metadata={"help": "Weight for the semantic-KV clustering regularizer."},
@@ -656,6 +662,9 @@ class SGLangConfig:
     adapter_init_value: float = 1.0
     enable_semantic_kv: bool = False
     semantic_kv_rank: int = 32
+    semantic_kv_budget_ratio: float = 0.5
+    semantic_kv_sink_window_size: int = 16
+    semantic_kv_recent_window_size: int = 64
     semantic_kv_load_path: Optional[str] = None
 
     # Use staticmethod to make OmegaConf happy.

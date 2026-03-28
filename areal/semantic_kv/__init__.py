@@ -19,6 +19,7 @@ def enable_semantic_kv_training(
     budget_ratio: float = 0.5,
     sink_window_size: int = 16,
     recent_window_size: int = 64,
+    selector_temperature: float = 1.0,
     ulysses_sp_size: int = 1,
 ):
     if "llama" in model.config.model_type:
@@ -28,6 +29,7 @@ def enable_semantic_kv_training(
             budget_ratio=budget_ratio,
             sink_window_size=sink_window_size,
             recent_window_size=recent_window_size,
+            selector_temperature=selector_temperature,
             ulysses_sp_size=ulysses_sp_size,
         )
     elif "qwen2" in model.config.model_type:
@@ -37,6 +39,7 @@ def enable_semantic_kv_training(
             budget_ratio=budget_ratio,
             sink_window_size=sink_window_size,
             recent_window_size=recent_window_size,
+            selector_temperature=selector_temperature,
             ulysses_sp_size=ulysses_sp_size,
         )
     elif "qwen3" in model.config.model_type:
@@ -46,6 +49,7 @@ def enable_semantic_kv_training(
             budget_ratio=budget_ratio,
             sink_window_size=sink_window_size,
             recent_window_size=recent_window_size,
+            selector_temperature=selector_temperature,
             ulysses_sp_size=ulysses_sp_size,
         )
     else:

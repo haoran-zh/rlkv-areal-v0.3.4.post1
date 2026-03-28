@@ -350,6 +350,7 @@ class FSDPEngine(BaseHFEngine):
             budget_ratio=self.config.semantic_kv_budget_ratio,
             sink_window_size=self.config.semantic_kv_sink_window_size,
             recent_window_size=self.config.semantic_kv_recent_window_size,
+            selector_temperature=self.config.semantic_kv_selector_temperature,
             ulysses_sp_size=self.parallel_helper.sp_size,
         )
 

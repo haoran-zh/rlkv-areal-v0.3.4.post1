@@ -73,6 +73,7 @@ actor:
   semantic_kv_budget_ratio: 0.5
   semantic_kv_sink_window_size: 16
   semantic_kv_recent_window_size: 64
+  semantic_kv_selector_temperature: 1.0
   semantic_kv_cluster_loss_scale: 0.1
   semantic_kv_cluster_temperature: 0.1
 
@@ -93,11 +94,17 @@ sglang:
   random_seed: ${seed}
   skip_tokenizer_init: true
   dtype: ${actor.dtype}
+  attention_backend: torch_native
   max_running_requests: 128
   context_length: 7680
   mem_fraction_static: 0.7
   enable_semantic_kv: true
+  disable_radix_cache: true
+  disable_overlap_schedule: true
   semantic_kv_rank: ${actor.semantic_kv_rank}
+  semantic_kv_budget_ratio: ${actor.semantic_kv_budget_ratio}
+  semantic_kv_sink_window_size: ${actor.semantic_kv_sink_window_size}
+  semantic_kv_recent_window_size: ${actor.semantic_kv_recent_window_size}
 
 train_dataset:
   batch_size: 32

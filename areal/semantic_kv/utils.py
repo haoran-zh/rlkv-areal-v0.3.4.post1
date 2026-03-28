@@ -54,6 +54,7 @@ def save_semantic_kv_weight(model, state_dict, save_dir):
         "budget_ratio": modules[0].budget_ratio,
         "sink_window_size": modules[0].sink_window_size,
         "recent_window_size": modules[0].recent_window_size,
+        "selector_temperature": modules[0].selector_temperature,
     }
 
     torch.save(
