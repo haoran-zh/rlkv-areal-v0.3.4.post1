@@ -1,6 +1,7 @@
 set -e
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
+export WANDB_MODE="${WANDB_MODE:-offline}"
 
 model="${1:-deepseek-ai/DeepSeek-R1-Distill-Llama-8B}"
 trial_name="${2:-semantic_kv_r32}"
@@ -41,4 +42,4 @@ python3 -m areal.launcher.local examples/math/gsm8k_grpo.py --config "${config_p
     ++sglang.disable_radix_cache="true" \
     ++sglang.disable_overlap_schedule="true" \
     ++sglang.attention_backend="torch_native" \
-    ++stats_logger.wandb.mode="online"
+    ++stats_logger.wandb.mode="${WANDB_MODE}"

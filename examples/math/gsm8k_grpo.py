@@ -163,10 +163,25 @@ def main(args):
         if recover_info is not None
         else 0
     )
+    if getattr(config.actor, "enable_learned_loki_training", False):
+        actor._learned_loki_step = start_step
 
     total_epochs = config.total_train_epochs
     steps_per_epoch = len(train_dataloader)
     max_steps = total_epochs * steps_per_epoch
+
+    if recover_info is None and (
+        getattr(config.actor, "enable_semantic_kv_training", False)
+        or getattr(config.actor, "enable_learned_loki_training", False)
+    ):
+        if dist.get_rank() == 0:
+            future = rollout.update_weights(weight_update_meta)
+        actor.upload_weights(weight_update_meta)
+        if dist.get_rank() == 0:
+            future.result()
+        dist.barrier(device_ids=[actor.device.index])
+        current_platform.synchronize()
+        rollout.set_version(actor.get_version())
 
     data_generator = cycle_dataloader(train_dataloader)
     for global_step in range(start_step, max_steps):

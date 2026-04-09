@@ -11,12 +11,53 @@ from areal.utils import logging, name_resolve, names
 
 logger = logging.getLogger("Launcher Utils")
 
-LOCAL_CACHE_DIR = "/tmp/areal"
-PYTORCH_KERNEL_CACHE_PATH = (
-    f"{LOCAL_CACHE_DIR}/.cache/{getpass.getuser()}/torch/kernels/"
+def _resolve_local_cache_dir() -> str:
+    override = os.getenv("AREAL_LOCAL_CACHE_DIR")
+    if override:
+        return os.path.abspath(os.path.expanduser(os.path.expandvars(override)))
+
+    xdg_cache_home = os.getenv("XDG_CACHE_HOME")
+    if xdg_cache_home:
+        return os.path.join(
+            os.path.abspath(os.path.expanduser(os.path.expandvars(xdg_cache_home))),
+            "areal",
+        )
+
+    return str(pathlib.Path.home() / ".cache" / "areal")
+
+
+LOCAL_CACHE_DIR = _resolve_local_cache_dir()
+_CACHE_USER = getpass.getuser()
+HF_HOME = os.getenv(
+    "HF_HOME",
+    f"{LOCAL_CACHE_DIR}/.cache/{_CACHE_USER}/huggingface",
 )
-VLLM_CACHE_ROOT = f"{LOCAL_CACHE_DIR}/.cache/{getpass.getuser()}/vllm/"
-TRITON_CACHE_PATH = f"{LOCAL_CACHE_DIR}/.cache/{getpass.getuser()}/triton/"
+HF_HUB_CACHE = os.getenv(
+    "HUGGINGFACE_HUB_CACHE",
+    os.getenv("HF_HUB_CACHE", f"{HF_HOME}/hub"),
+)
+TRANSFORMERS_CACHE = os.getenv(
+    "TRANSFORMERS_CACHE",
+    f"{HF_HOME}/transformers",
+)
+HF_DATASETS_CACHE = os.getenv(
+    "HF_DATASETS_CACHE",
+    f"{HF_HOME}/datasets",
+)
+PYTORCH_KERNEL_CACHE_PATH = (
+    os.getenv(
+        "PYTORCH_KERNEL_CACHE_PATH",
+        f"{LOCAL_CACHE_DIR}/.cache/{_CACHE_USER}/torch/kernels/",
+    )
+)
+VLLM_CACHE_ROOT = os.getenv(
+    "VLLM_CACHE_ROOT",
+    f"{LOCAL_CACHE_DIR}/.cache/{_CACHE_USER}/vllm/",
+)
+TRITON_CACHE_PATH = os.getenv(
+    "TRITON_CACHE_DIR",
+    f"{LOCAL_CACHE_DIR}/.cache/{_CACHE_USER}/triton/",
+)
 PYTHONPATH = os.pathsep.join(
     filter(
         None,
@@ -29,8 +70,16 @@ PYTHONPATH = os.pathsep.join(
 os.makedirs(PYTORCH_KERNEL_CACHE_PATH, exist_ok=True)
 os.makedirs(VLLM_CACHE_ROOT, exist_ok=True)
 os.makedirs(TRITON_CACHE_PATH, exist_ok=True)
+os.makedirs(HF_HUB_CACHE, exist_ok=True)
+os.makedirs(TRANSFORMERS_CACHE, exist_ok=True)
+os.makedirs(HF_DATASETS_CACHE, exist_ok=True)
 BASE_ENVIRONS = {
     "TOKENIZERS_PARALLELISM": "true",
+    "HF_HOME": HF_HOME,
+    "HF_HUB_CACHE": HF_HUB_CACHE,
+    "HUGGINGFACE_HUB_CACHE": HF_HUB_CACHE,
+    "TRANSFORMERS_CACHE": TRANSFORMERS_CACHE,
+    "HF_DATASETS_CACHE": HF_DATASETS_CACHE,
     "PYTORCH_KERNEL_CACHE_PATH": PYTORCH_KERNEL_CACHE_PATH,
     "TRITON_CACHE_DIR": TRITON_CACHE_PATH,
     "VLLM_CACHE_ROOT": VLLM_CACHE_ROOT,

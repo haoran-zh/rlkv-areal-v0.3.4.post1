@@ -25,7 +25,6 @@ from areal.utils.launcher import (
     JobInfo,
     JobState,
     get_env_vars,
-    wait_llm_server_addrs,
 )
 from areal.utils.recover import check_if_recover
 from areal.utils.slurm import (
@@ -34,6 +33,8 @@ from areal.utils.slurm import (
     SRUN_CMD_TEMPLATE,
     cancel_jobs,
     query_jobs,
+    slurm_uses_gres,
+    slurm_uses_memory_flags,
     validate_config_for_slurm_launcher,
 )
 
@@ -63,7 +64,7 @@ class SlurmLauncher:
 
     def slurm_name(self, job_name: str) -> str:
         """Returns the slurm name of a job."""
-        return f"{self.experiment_name}_{self.trial_name}:{job_name}"
+        return f"{self.experiment_name}_{self.trial_name}__{job_name}"
 
     def log_path_of(self, job_name: str) -> str:
         log_path = f"{self.fileroot}/logs/{getpass.getuser()}/{self.experiment_name}/{self.trial_name}"
@@ -147,10 +148,12 @@ class SlurmLauncher:
             "--no-requeue",
             f"--nodes={nodes}-{nodes}",
             f"--ntasks-per-node={ntasks_per_node}",
-            f"--gres=gpu:{n_gpus_per_node}",
             f"--cpus-per-task={cpus_per_task}",
-            f"--mem={mem_per_node}M",
         ]
+        if slurm_uses_gres():
+            sbatch_options.append(f"--gres=gpu:{n_gpus_per_node}")
+        if slurm_uses_memory_flags():
+            sbatch_options.append(f"--mem={mem_per_node}M")
 
         if nodelist:
             sbatch_options.append(f"--nodelist={nodelist}")
@@ -193,12 +196,19 @@ class SlurmLauncher:
                     ntasks=1,
                     node_id=node_id,
                     n_gpus_per_node=n_gpus_per_task,
+                    gres_arg=(
+                        f"--gres=gpu:{n_gpus_per_task}" if slurm_uses_gres() else ""
+                    ),
                     cpus_per_task=cpus_per_task,
-                    mem_per_cpu=mem_per_cpu,
+                    mem_per_cpu_arg=(
+                        f"--mem-per-cpu={mem_per_cpu}M"
+                        if slurm_uses_memory_flags()
+                        else ""
+                    ),
                     cmd=apptainer_cmd,
                 )
             elif self.container_type == "none":
-                env_string = "--export=" + ",".join(
+                env_string = "--export=ALL," + ",".join(
                     "{}={}".format(k, v) for k, v in _env_vars.items()
                 )
                 srun_additional_args = srun_additional_args + " " + env_string
@@ -208,8 +218,15 @@ class SlurmLauncher:
                     ntasks=1,
                     node_id=node_id,
                     n_gpus_per_node=n_gpus_per_task,
+                    gres_arg=(
+                        f"--gres=gpu:{n_gpus_per_task}" if slurm_uses_gres() else ""
+                    ),
                     cpus_per_task=cpus_per_task,
-                    mem_per_cpu=mem_per_cpu,
+                    mem_per_cpu_arg=(
+                        f"--mem-per-cpu={mem_per_cpu}M"
+                        if slurm_uses_memory_flags()
+                        else ""
+                    ),
                     cmd=job_cmd,
                 )
             else:
@@ -223,6 +240,7 @@ class SlurmLauncher:
         sbatch_script = SBATCH_SCRIPT_TEMPLATE.format(
             sbatch_options=sbatch_options_str,
             srun_additional_args=srun_additional_args,
+            small_mem_arg="--mem=10M" if slurm_uses_memory_flags() else "",
             srun_cmds=srun_cmds,
         )
         sbatch_file_path = self.sbatch_path_of(f"{job_name}")
@@ -397,6 +415,50 @@ class SlurmLauncher:
             )
 
 
+def _resolve_rollout_wait_timeout() -> int | None:
+    value = os.getenv("AREAL_SLURM_ROLLOUT_WAIT_TIMEOUT", "").strip().lower()
+    if value in {"", "none", "null", "inf", "infinite", "0"}:
+        return None
+    return int(value)
+
+
+def wait_slurm_rollout_servers(
+    launcher: SlurmLauncher,
+    experiment_name: str,
+    trial_name: str,
+    n_rollout_servers: int = 1,
+    timeout: int | None = None,
+    job_name: str = "llm_server",
+) -> List[str]:
+    name = names.gen_servers(experiment_name, trial_name)
+    start = time.perf_counter()
+
+    while True:
+        rollout_addrs = name_resolve.get_subtree(name)
+        if len(rollout_addrs) >= n_rollout_servers:
+            logger.info(
+                f"Found {len(rollout_addrs)} rollout servers: {', '.join(rollout_addrs)}"
+            )
+            return rollout_addrs
+
+        job_info = launcher.find(job_name)
+        if job_info is not None and not job_info.state.active():
+            raise JobException(
+                run_name=launcher.run_name,
+                worker_type=job_info.name,
+                host=job_info.host,
+                reason=job_info.state,
+            )
+
+        if timeout is not None and time.perf_counter() - start > timeout:
+            raise TimeoutError(
+                f"Timeout waiting for rollout servers to be ready. "
+                f"Expected {n_rollout_servers} servers, found {len(rollout_addrs)}."
+            )
+
+        time.sleep(SLURM_WAIT_CHECK_TIME_INTERVAL)
+
+
 def main():
     config, _ = parse_cli_args(sys.argv[1:])
     slurm_main(config, run_id=0)
@@ -533,12 +595,14 @@ def slurm_main(config, run_id: int = 0):
         )
         # Get llm server addresses by name resolve
         try:
-            llm_addrs = wait_llm_server_addrs(
+            llm_addrs = wait_slurm_rollout_servers(
+                launcher,
                 config.experiment_name,
                 config.trial_name,
                 n_backend_servers,
+                timeout=_resolve_rollout_wait_timeout(),
             )
-        except (TimeoutError, KeyboardInterrupt) as e:
+        except (TimeoutError, KeyboardInterrupt, JobException) as e:
             launcher.stop_all(force=True)
             raise e
 

@@ -77,6 +77,7 @@ class BaseHFEngine(TrainEngine):
 
         self.enable_mixed_attn_training = self.config.enable_mixed_attn_training
         self.enable_semantic_kv_training = self.config.enable_semantic_kv_training
+        self.enable_learned_loki_training = self.config.enable_learned_loki_training
 
     def set_version(self, version: int):
         self._version = version
@@ -156,24 +157,27 @@ class BaseHFEngine(TrainEngine):
             )
 
             tik = time.perf_counter()
-            device = current_platform.device_type
-            with torch.device(device):
-                model = AutoModelForImageTextToText.from_pretrained(
-                    pretrained_model_name_or_path=self.config.path,
-                    trust_remote_code=True,
-                    torch_dtype=dtype,
-                    attn_implementation=self.config.attn_impl,
-                )
-                if self.config.disable_dropout:
-                    disable_dropout_in_model(model)
+            model = self._from_pretrained_with_dtype(
+                AutoModelForImageTextToText,
+                pretrained_model_name_or_path=self.config.path,
+                dtype=dtype,
+                trust_remote_code=True,
+                low_cpu_mem_usage=True,
+                attn_implementation=self.config.attn_impl,
+            )
+            if self.config.disable_dropout:
+                disable_dropout_in_model(model)
         else:
             self.tokenizer = load_hf_tokenizer(self.config.path)
             self.processor = None
             tik = time.perf_counter()
-            with torch.device(current_platform.device_type):
-                model = self._create_llm_actor_or_critic()
-                if self.config.disable_dropout:
-                    disable_dropout_in_model(model)
+            model = self._create_llm_actor_or_critic()
+            if self.config.disable_dropout:
+                disable_dropout_in_model(model)
+
+        move_tik = time.perf_counter()
+        model = model.to(self.device)
+        self.logger.info(f"Model transfer to device time: {time.perf_counter() - move_tik}")
 
         if self.config.gradient_checkpointing:
             model.gradient_checkpointing_enable(
@@ -183,6 +187,21 @@ class BaseHFEngine(TrainEngine):
             f"Model creation and loading time: {time.perf_counter() - tik}"
         )
         self.model = model
+
+    @staticmethod
+    def _from_pretrained_with_dtype(model_cls, *, pretrained_model_name_or_path, dtype, **kwargs):
+        try:
+            return model_cls.from_pretrained(
+                pretrained_model_name_or_path=pretrained_model_name_or_path,
+                dtype=dtype,
+                **kwargs,
+            )
+        except TypeError:
+            return model_cls.from_pretrained(
+                pretrained_model_name_or_path=pretrained_model_name_or_path,
+                torch_dtype=dtype,
+                **kwargs,
+            )
 
     def _create_llm_actor_or_critic(self):
         dtype = getattr(torch, self.config.dtype)
@@ -198,10 +217,12 @@ class BaseHFEngine(TrainEngine):
                     attn_implementation=self.config.attn_impl,
                 )
             else:
-                model = AutoModelForCausalLM.from_pretrained(
+                model = self._from_pretrained_with_dtype(
+                    AutoModelForCausalLM,
                     pretrained_model_name_or_path=self.config.path,
+                    dtype=dtype,
                     trust_remote_code=True,
-                    torch_dtype=dtype,
+                    low_cpu_mem_usage=True,
                     attn_implementation=self.config.attn_impl,
                 )
         else:
@@ -213,10 +234,12 @@ class BaseHFEngine(TrainEngine):
                     attn_implementation=self.config.attn_impl,
                 )
             else:
-                model = AutoModelForTokenClassification.from_pretrained(
+                model = self._from_pretrained_with_dtype(
+                    AutoModelForTokenClassification,
                     pretrained_model_name_or_path=self.config.path,
+                    dtype=dtype,
                     trust_remote_code=True,
-                    torch_dtype=dtype,
+                    low_cpu_mem_usage=True,
                     num_labels=1,
                     attn_implementation=self.config.attn_impl,
                 )

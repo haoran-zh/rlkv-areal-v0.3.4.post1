@@ -26,6 +26,14 @@ from areal.api.alloc_mode import FSDPParallelStrategy, ParallelStrategy
 from areal.api.cli_args import TrainEngineConfig
 from areal.api.io_struct import FinetuneSpec, ParamSpec, SaveLoadMeta, WeightUpdateMeta
 from areal.engine.base_hf_engine import BaseHFEngine
+from areal.learned_loki import (
+    collect_learned_loki_training_states,
+    enable_learned_loki_training,
+    initialize_learned_loki_from_checkpoint,
+    learned_loki_sparse_loss_fn,
+    load_learned_loki_weight,
+    save_learned_loki_weight,
+)
 from areal.mixed_attn import (
     clamp_adapter_weight,
     enable_mixed_attention_training,
@@ -78,6 +86,7 @@ class FSDPEngine(BaseHFEngine):
         self.rank: int
         self.dp_head: int
         self.dp_rank: int
+        self._learned_loki_step = 0
 
     @property
     def data_parallel_group(self) -> dist.ProcessGroup:
@@ -140,6 +149,7 @@ class FSDPEngine(BaseHFEngine):
         self.logger.info(f"Data parallel head {self.dp_head} and rank {self.dp_rank}")
         self.enable_mixed_attn_training = self.config.enable_mixed_attn_training
         self.enable_semantic_kv_training = self.config.enable_semantic_kv_training
+        self.enable_learned_loki_training = self.config.enable_learned_loki_training
 
     def initialize(self, addr: str | None, ft_spec: FinetuneSpec | None):
         # Initialize distributed enviroments and load model.
@@ -161,15 +171,26 @@ class FSDPEngine(BaseHFEngine):
         if self.config.use_lora:
             self._apply_peft_wrapper()
 
-        if self.enable_mixed_attn_training and self.enable_semantic_kv_training:
+        enabled_sparse_training_modes = sum(
+            int(flag)
+            for flag in (
+                self.enable_mixed_attn_training,
+                self.enable_semantic_kv_training,
+                self.enable_learned_loki_training,
+            )
+        )
+        if enabled_sparse_training_modes > 1:
             raise ValueError(
-                "enable_mixed_attn_training and enable_semantic_kv_training are mutually exclusive."
+                "enable_mixed_attn_training, enable_semantic_kv_training, and "
+                "enable_learned_loki_training are mutually exclusive."
             )
 
         if self.enable_mixed_attn_training:
             self._apply_mixed_attention_wrapper()
         elif self.enable_semantic_kv_training:
             self._apply_semantic_kv_wrapper()
+        elif self.enable_learned_loki_training:
+            self._apply_learned_loki_wrapper()
 
         # sharding_strategy = ShardingStrategy.FULL_SHARD
         # Simple auto wrap policy
@@ -255,6 +276,8 @@ class FSDPEngine(BaseHFEngine):
                 save_adapter_weight(self.model.config._name_or_path, state_dict, path)
             elif self.enable_semantic_kv_training:
                 save_semantic_kv_weight(self.model, state_dict, path)
+            elif self.enable_learned_loki_training:
+                save_learned_loki_weight(self.model, state_dict, path)
             else:
                 os.makedirs(path, exist_ok=True)
                 self.model.save_pretrained(path, state_dict=state_dict)
@@ -286,6 +309,14 @@ class FSDPEngine(BaseHFEngine):
                     )
                 full_state = get_state_dict_from_repo_id_or_path(model_name)
                 full_state.update(semantic_kv_state_dict)
+            elif self.enable_learned_loki_training:
+                model_name, learned_loki_state_dict, _ = load_learned_loki_weight(path)
+                if model_name != self.model.config._name_or_path:
+                    raise ValueError(
+                        f"Model name mismatch: {model_name} vs {self.model.config._name_or_path}"
+                    )
+                full_state = get_state_dict_from_repo_id_or_path(model_name)
+                full_state.update(learned_loki_state_dict)
             else:
                 full_state = get_state_dict_from_repo_id_or_path(path)
         else:
@@ -361,6 +392,72 @@ class FSDPEngine(BaseHFEngine):
                     self.logger.info(f"Training semantic_kv weight: {name}")
             else:
                 param.requires_grad = False
+
+    def _apply_learned_loki_wrapper(self):
+        if self.parallel_helper.sp_size > 1:
+            raise ValueError(
+                "Learned-Loki training currently requires sequence parallel size 1."
+            )
+
+        enable_learned_loki_training(
+            self.model,
+            low_rank_dim=self.config.learned_loki_rank,
+            budget_ratio=self.config.learned_loki_budget_ratio,
+            sink_window_size=self.config.learned_loki_sink_window_size,
+            recent_window_size=self.config.learned_loki_recent_window_size,
+            gate_temperature=self.config.learned_loki_gate_temperature_init,
+            threshold_init=self.config.learned_loki_threshold_init,
+            ulysses_sp_size=self.parallel_helper.sp_size,
+        )
+
+        if self.config.learned_loki_init_mode == "pca":
+            if not self.config.learned_loki_init_path:
+                raise ValueError(
+                    "learned_loki_init_path must be provided when "
+                    "learned_loki_init_mode='pca'."
+                )
+            checkpoint_config = initialize_learned_loki_from_checkpoint(
+                self.model,
+                self.config.learned_loki_init_path,
+            )
+            checkpoint_rank = checkpoint_config.get("low_rank_dim", None)
+            if (
+                checkpoint_rank is not None
+                and checkpoint_rank != self.config.learned_loki_rank
+            ):
+                raise ValueError(
+                    "Learned-Loki rank mismatch between the checkpoint and training "
+                    f"config: {checkpoint_rank} vs {self.config.learned_loki_rank}"
+                )
+        elif self.config.learned_loki_init_mode != "orthogonal":
+            raise ValueError(
+                "learned_loki_init_mode must be either 'orthogonal' or 'pca'."
+            )
+
+        for name, param in self.model.named_parameters():
+            if "learned_loki" in name:
+                param.requires_grad = not name.endswith("gate_temperature_param")
+                if self.rank == 0:
+                    self.logger.info(f"Training learned_loki weight: {name}")
+            else:
+                param.requires_grad = False
+
+    def _maybe_update_learned_loki_temperature(self):
+        if not self.enable_learned_loki_training:
+            return
+
+        anneal_steps = max(self.config.learned_loki_gate_temperature_anneal_steps, 0)
+        start = self.config.learned_loki_gate_temperature_init
+        end = self.config.learned_loki_gate_temperature_final
+        if anneal_steps <= 0:
+            current_temperature = start
+        else:
+            progress = min(self._learned_loki_step, anneal_steps) / float(anneal_steps)
+            current_temperature = start + (end - start) * progress
+
+        for _, module in self.model.named_modules():
+            if hasattr(module, "learned_loki") and module.learned_loki is not None:
+                module.learned_loki.gate_temperature = current_temperature
 
     def upload_weights(self, meta: WeightUpdateMeta):
         if meta.type == current_platform.communication_backend:
@@ -445,6 +542,8 @@ class FSDPEngine(BaseHFEngine):
                 continue
             if self.enable_semantic_kv_training and "semantic_kv" not in name:
                 continue
+            if self.enable_learned_loki_training and "learned_loki" not in name:
+                continue
             if isinstance(param.data, DTensor):
                 tensor = param.data.full_tensor()
             else:
@@ -489,6 +588,7 @@ class FSDPEngine(BaseHFEngine):
         )
         assert total_loss_weight != 0
         dist.all_reduce(total_loss_weight, group=self.dp_group)
+        self._maybe_update_learned_loki_temperature()
 
         # Process microbatches with gradient accumulation
         for pad_length, padded_mb_input, mb_input in zip(
@@ -569,6 +669,16 @@ class FSDPEngine(BaseHFEngine):
                     cluster_loss = torch.zeros((), device=logits.device)
 
                 loss += self.config.semantic_kv_cluster_loss_scale * cluster_loss
+            elif self.enable_learned_loki_training:
+                learned_loki_states = collect_learned_loki_training_states(self.model)
+                sparse_loss = learned_loki_sparse_loss_fn(learned_loki_states).float()
+                sparse_scale = self.config.learned_loki_sparse_loss_scale
+                if self.config.learned_loki_reward_scaled_sparse_loss:
+                    reward_scores = mb_input["rewards"].to(
+                        device=logits.device, dtype=torch.float32
+                    )
+                    sparse_scale *= max(float(reward_scores.mean().item()), 0.0)
+                loss += sparse_scale * sparse_loss
 
             loss_scale = loss_weight_fn(mb_input) / total_loss_weight
 
@@ -592,6 +702,8 @@ class FSDPEngine(BaseHFEngine):
         else:
             self.optimizer.step()
             update_successful = True
+            if self.enable_learned_loki_training:
+                self._learned_loki_step += 1
 
         current_lr = self.lr_scheduler.get_last_lr()[0]
         return dict(

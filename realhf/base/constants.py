@@ -64,17 +64,50 @@ NCCL_DEFAULT_TIMEOUT = datetime.timedelta(seconds=7200)
 # We may want to use CPU for testing even when CUDA is available.
 TORCH_FORCE_CPU = False
 
+
+def _resolve_cache_root(env_var: str, namespace: str) -> str:
+    override = os.getenv(env_var)
+    if override:
+        return os.path.abspath(os.path.expanduser(os.path.expandvars(override)))
+
+    xdg_cache_home = os.getenv("XDG_CACHE_HOME")
+    if xdg_cache_home:
+        return os.path.join(
+            os.path.abspath(os.path.expanduser(os.path.expandvars(xdg_cache_home))),
+            namespace,
+        )
+
+    return str(Path.home() / ".cache" / namespace)
+
+
 # constants in experiment instance scope
-LOCAL_CACHE_DIR = "/tmp/realhf"
+LOCAL_CACHE_DIR = _resolve_cache_root("REALHF_LOCAL_CACHE_DIR", "realhf")
 QUICKSTART_EXPR_CACHE_PATH = str(Path(__file__).parent.parent.parent / ".cache")
 os.makedirs(QUICKSTART_EXPR_CACHE_PATH, exist_ok=True)
-PORT_LOCKFILE_ROOT = os.getenv("AREAL_PORT_LOCKFILE_ROOT", "/tmp/areal/ports/")
+PORT_LOCKFILE_ROOT = os.path.abspath(
+    os.path.expanduser(
+        os.path.expandvars(
+            os.getenv(
+                "REALHF_PORT_LOCKFILE_ROOT",
+                os.getenv(
+                    "AREAL_PORT_LOCKFILE_ROOT",
+                    os.path.join(LOCAL_CACHE_DIR, "ports"),
+                ),
+            )
+        )
+    )
+)
 os.makedirs(PORT_LOCKFILE_ROOT, exist_ok=True)
 
-PYTORCH_KERNEL_CACHE_PATH = (
-    f"{LOCAL_CACHE_DIR}/.cache/{getpass.getuser()}/torch/kernels"
+_CACHE_USER = getpass.getuser()
+PYTORCH_KERNEL_CACHE_PATH = os.getenv(
+    "PYTORCH_KERNEL_CACHE_PATH",
+    f"{LOCAL_CACHE_DIR}/.cache/{_CACHE_USER}/torch/kernels",
 )
-TRITON_CACHE_PATH = f"{LOCAL_CACHE_DIR}/.cache/{getpass.getuser()}/triton"
+TRITON_CACHE_PATH = os.getenv(
+    "TRITON_CACHE_DIR",
+    f"{LOCAL_CACHE_DIR}/.cache/{_CACHE_USER}/triton",
+)
 os.makedirs(PYTORCH_KERNEL_CACHE_PATH, exist_ok=True)
 os.makedirs(TRITON_CACHE_PATH, exist_ok=True)
 

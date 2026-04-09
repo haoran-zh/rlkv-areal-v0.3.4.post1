@@ -1,5 +1,6 @@
 set -e
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
+export WANDB_MODE="${WANDB_MODE:-offline}"
 
 expr_name=AReaL-GRPO-n4-streaming-llama
 model=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
@@ -32,4 +33,4 @@ python3 -m areal.launcher.local examples/lite/gsm8k_grpo.py --config examples/rl
     ++sglang.sink_window_size="${sink_win_size}" \
     ++sglang.recent_window_size="${recent_win_size}" \
     ++sglang.adapter_init_value="${adapter_init_value}" \
-    ++stats_logger.wandb.mode="online"
+    ++stats_logger.wandb.mode="${WANDB_MODE}"

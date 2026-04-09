@@ -242,7 +242,7 @@ class TrainEngineConfig:
         default="flash_attention_2",
         metadata={
             "help": "Attention implementation for huggingface transformers model.",
-            "choices": ["flash_attention_2"],
+            "choices": ["flash_attention_2", "sdpa"],
         },
     )
     init_from_scratch: bool = field(
@@ -489,6 +489,70 @@ class PPOActorConfig(TrainEngineConfig):
         default=0.1,
         metadata={"help": "Temperature for the soft clustering assignments."},
     )
+    enable_learned_loki_training: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable Learned-Loki training with per-layer low-rank scoring "
+            "matrices and soft token gates."
+        },
+    )
+    learned_loki_rank: int = field(
+        default=32,
+        metadata={"help": "Low-rank dimension for each Learned-Loki projector."},
+    )
+    learned_loki_budget_ratio: float = field(
+        default=0.5,
+        metadata={"help": "Inference-time middle-token budget ratio for Learned-Loki."},
+    )
+    learned_loki_sink_window_size: int = field(
+        default=16,
+        metadata={"help": "Number of sink tokens always retained by Learned-Loki."},
+    )
+    learned_loki_recent_window_size: int = field(
+        default=64,
+        metadata={"help": "Number of recent tokens always retained by Learned-Loki."},
+    )
+    learned_loki_threshold_init: float = field(
+        default=0.0,
+        metadata={"help": "Initial gating threshold for Learned-Loki."},
+    )
+    learned_loki_init_mode: str = field(
+        default="orthogonal",
+        metadata={
+            "help": "Initialization mode for Learned-Loki projectors.",
+            "choices": ["orthogonal", "pca"],
+        },
+    )
+    learned_loki_init_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Optional checkpoint path used to initialize Learned-Loki projectors before RL training."
+        },
+    )
+    learned_loki_gate_temperature_init: float = field(
+        default=1.0,
+        metadata={"help": "Initial soft gate temperature for Learned-Loki."},
+    )
+    learned_loki_gate_temperature_final: float = field(
+        default=1.0,
+        metadata={"help": "Final soft gate temperature for Learned-Loki."},
+    )
+    learned_loki_gate_temperature_anneal_steps: int = field(
+        default=0,
+        metadata={
+            "help": "Number of optimizer steps used to linearly anneal the Learned-Loki gate temperature."
+        },
+    )
+    learned_loki_sparse_loss_scale: float = field(
+        default=0.1,
+        metadata={"help": "Weight for the Learned-Loki sparsity regularizer."},
+    )
+    learned_loki_reward_scaled_sparse_loss: bool = field(
+        default=False,
+        metadata={
+            "help": "Scale the Learned-Loki sparsity regularizer by the mean reward of the current batch."
+        },
+    )
 
 
 @dataclass
@@ -666,6 +730,14 @@ class SGLangConfig:
     semantic_kv_sink_window_size: int = 16
     semantic_kv_recent_window_size: int = 64
     semantic_kv_load_path: Optional[str] = None
+    enable_learned_loki: bool = False
+    learned_loki_rank: int = 32
+    learned_loki_budget_ratio: float = 0.5
+    learned_loki_sink_window_size: int = 16
+    learned_loki_recent_window_size: int = 64
+    learned_loki_gate_temperature: float = 1.0
+    learned_loki_threshold_init: float = 0.0
+    learned_loki_load_path: Optional[str] = None
 
     # Use staticmethod to make OmegaConf happy.
     @staticmethod

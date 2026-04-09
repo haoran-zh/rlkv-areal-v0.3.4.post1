@@ -1,3 +1,5 @@
+import os
+import shlex
 import subprocess
 from typing import List, Literal, Optional
 
@@ -77,25 +79,25 @@ head_node=${{nodes_array[0]}}
 echo head_node=$head_node
 
 # Getting the head node IP address
-head_node_ip=$(srun {srun_additional_args} --nodes=1 --ntasks=1 -n1 -c1 --mem=10M --nodelist="$head_node" hostname --ip-address)
+head_node_ip=$(srun {srun_additional_args} --nodes=1 --ntasks=1 -n1 -c1 {small_mem_arg} --nodelist="$head_node" hostname --ip-address)
 echo head_node_ip=$head_node_ip
 
 # Find a free port on the head node
 # Wonderful linux command to find a random free port (between 10000 and 60000) by deepseek
-trainer_port=$(srun {srun_additional_args} --nodes=1 --ntasks=1 -n1 -c1 --mem=10M --nodelist="$head_node" bash -c "comm -23 <(seq 10000 60000 | sort) <(ss -tan | awk '{{print $4}}' | cut -d':' -f2 | grep '[0-9]\\{{1,5\\}}' | sort -u) | shuf | head -n 1")
+trainer_port=$(srun {srun_additional_args} --nodes=1 --ntasks=1 -n1 -c1 {small_mem_arg} --nodelist="$head_node" bash -c "comm -23 <(seq 10000 60000 | sort) <(ss -tan | awk '{{print $4}}' | cut -d':' -f2 | grep '[0-9]\\{{1,5\\}}' | sort -u) | shuf | head -n 1")
 echo trainer_port=$trainer_port
 
 # Get IP address of each node
 master_addrs=()
 for node in "${{nodes_array[@]}}"; do
-    ip=$(srun {srun_additional_args} --nodes=1 --ntasks=1 -n1 -c1 --mem=10M --nodelist="$node" hostname --ip-address)
+    ip=$(srun {srun_additional_args} --nodes=1 --ntasks=1 -n1 -c1 {small_mem_arg} --nodelist="$node" hostname --ip-address)
     master_addrs+=("$ip")
 done
 echo master_addrs="${{master_addrs[@]}}"
 # Get a free port for each node
 master_ports=()
 for node in "${{nodes_array[@]}}"; do
-    port=$(srun {srun_additional_args} --nodes=1 --ntasks=1 -n1 -c1 --mem=10M --nodelist="$node" bash -c "comm -23 <(seq 10000 60000 | sort) <(ss -tan | awk '{{print $4}}' | cut -d':' -f2 | grep '[0-9]\\{{1,5\\}}' | sort -u) | shuf | head -n 1")
+    port=$(srun {srun_additional_args} --nodes=1 --ntasks=1 -n1 -c1 {small_mem_arg} --nodelist="$node" bash -c "comm -23 <(seq 10000 60000 | sort) <(ss -tan | awk '{{print $4}}' | cut -d':' -f2 | grep '[0-9]\\{{1,5\\}}' | sort -u) | shuf | head -n 1")
     master_ports+=("$port")
 done
 
@@ -135,7 +137,7 @@ done
 
 SRUN_CMD_TEMPLATE: str = """srun {additional_args} \\
     --nodelist=${{nodes_array[{node_id}]}} --nodes={nodes} --ntasks={ntasks} \\
-    --gres=gpu:{n_gpus_per_node} --cpus-per-task={cpus_per_task} --mem-per-cpu={mem_per_cpu}M \\
+    {gres_arg} --cpus-per-task={cpus_per_task} {mem_per_cpu_arg} \\
     {cmd} &
 bg_pids+=($!)
 
@@ -172,6 +174,26 @@ def cancel_jobs(
         )
     except subprocess.CalledProcessError as e:
         logger.warning(f"Cancel slurm job failed, reason: {e}")
+
+
+def slurm_uses_gres() -> bool:
+    try:
+        output = subprocess.check_output(
+            ["scontrol", "show", "config"],
+            stderr=subprocess.DEVNULL,
+        ).decode("ascii", errors="ignore")
+    except Exception:
+        return True
+
+    for line in output.splitlines():
+        if line.strip().startswith("GresTypes"):
+            return "(null)" not in line
+    return True
+
+
+def slurm_uses_memory_flags() -> bool:
+    value = os.getenv("AREAL_SLURM_DISABLE_MEM", "")
+    return value.lower() not in {"1", "true", "yes", "on"}
 
 
 def query_jobs(
@@ -226,8 +248,9 @@ def parse_slurm_nodelist(nodelist: str) -> List[str]:
 
 def get_slurm_host_ip(node: str, srun_addtional_args: str):
     try:
-        cmd = f"srun {srun_addtional_args} --immediate=1 --nodes=1 --ntasks=1 -n1 -c1 --mem=10M --nodelist={node} hostname --ip-address"
-        return subprocess.check_output(cmd.split(" ")).decode("utf-8").strip()
+        mem_arg = "--mem=10M" if slurm_uses_memory_flags() else ""
+        cmd = f"srun {srun_addtional_args} --immediate=1 --nodes=1 --ntasks=1 -n1 -c1 {mem_arg} --nodelist={node} hostname --ip-address"
+        return subprocess.check_output(shlex.split(cmd)).decode("utf-8").strip()
     except subprocess.CalledProcessError:
         logger.warning(f"Get slurm host IP for node {node} failed.")
 

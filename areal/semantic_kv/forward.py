@@ -19,6 +19,17 @@ from areal.utils import logging
 logger = logging.getLogger("Semantic KV")
 
 
+def _init_orthogonal_param(param: nn.Parameter):
+    with torch.no_grad():
+        init_weight = torch.empty(
+            param.shape,
+            device=param.device,
+            dtype=torch.float32,
+        )
+        nn.init.orthogonal_(init_weight)
+        param.copy_(init_weight.to(dtype=param.dtype))
+
+
 def _compute_budget(
     total_tokens: int,
     budget_ratio: float,
@@ -143,7 +154,7 @@ class SemanticKVProjectionLayer(nn.Module):
         self.weight = nn.Parameter(
             torch.empty(low_rank_dim, head_dim, dtype=params_dtype)
         )
-        nn.init.orthogonal_(self.weight)
+        _init_orthogonal_param(self.weight)
 
         self.last_training_state = None
         self.runtime_generation_state = []
