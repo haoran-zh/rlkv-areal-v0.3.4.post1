@@ -422,6 +422,11 @@ def _resolve_rollout_wait_timeout() -> int | None:
     return int(value)
 
 
+def _submit_trainer_early() -> bool:
+    value = os.getenv("AREAL_SLURM_SUBMIT_TRAINER_EARLY", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def wait_slurm_rollout_servers(
     launcher: SlurmLauncher,
     experiment_name: str,
@@ -613,12 +618,19 @@ def slurm_main(config, run_id: int = 0):
         trainer_n_nodes = n_nodes - n_backend_nodes
         gpus_per_node = config.cluster.n_gpus_per_node
 
+    eager_submit_trainer = _submit_trainer_early()
+    trainer_args = " ".join(sys.argv[1:])
+    if eager_submit_trainer:
+        # Allow trainers to wait for rollout registration when they start before the
+        # rollout Slurm job has registered its address via name_resolve.
+        trainer_args = f"{trainer_args} ++rollout.setup_timeout=0"
+
     # Here $head_node_ip is the IP address of the first node in the job array.
     # $trainer_port is a free port on the head node.
     # Both of them are obtained in by the SBATCH script.
     trainer_cmd_template = (
         f"torchrun --nnodes={{nnodes}} --nproc-per-node={{nproc_per_node}} --node-rank {{node_rank}} "
-        f"--master-addr $head_node_ip --master-port $trainer_port {' '.join(sys.argv[1:])}"
+        f"--master-addr $head_node_ip --master-port $trainer_port {trainer_args}"
     )
 
     trainer_cmds = []
@@ -632,12 +644,12 @@ def slurm_main(config, run_id: int = 0):
             )
         )
 
-    if allocation_mode.type_ != AllocationType.LLM_SERVER_ONLY:
-        # launch trainers
+    def _launch_trainers(llm_addrs: Optional[List[str]] = None):
         _env_vars = dict(
-            AREAL_LLM_SERVER_ADDRS=",".join(llm_addrs),
             AREAL_RECOVER_RUN=str(int(is_recover_run)),
         )
+        if llm_addrs is not None:
+            _env_vars["AREAL_LLM_SERVER_ADDRS"] = ",".join(llm_addrs)
         if allocation_mode.gen_backend == "sglang":
             # Required by NCCL weight update group.
             _env_vars["NCCL_CUMEM_ENABLE"] = "0"
@@ -663,6 +675,13 @@ def slurm_main(config, run_id: int = 0):
                 **_env_vars,
             ),
         )
+
+    if allocation_mode.type_ != AllocationType.LLM_SERVER_ONLY and eager_submit_trainer:
+        _launch_trainers()
+
+    if allocation_mode.type_ != AllocationType.LLM_SERVER_ONLY and not eager_submit_trainer:
+        # launch trainers after rollout registration
+        _launch_trainers(llm_addrs)
 
     try:
         launcher.wait(

@@ -31,6 +31,12 @@ from areal.utils.launcher import wait_llm_server_addrs
 RID_CACHE_SIZE = 128
 
 
+def _resolve_setup_timeout(timeout: float | None) -> float | None:
+    if timeout is None or timeout <= 0:
+        return None
+    return timeout
+
+
 class RemotevLLMEngine(InferenceEngine):
     """
     A remote inference engine that communicates with vLLM servers to perform model inference.
@@ -58,7 +64,8 @@ class RemotevLLMEngine(InferenceEngine):
     def _wait_for_server(self, address):
         base_url = f"http://{address}"
         tik = time.time()
-        while time.time() - tik < self.config.setup_timeout:
+        timeout = _resolve_setup_timeout(self.config.setup_timeout)
+        while timeout is None or time.time() - tik < timeout:
             if self.check_health(base_url):
                 return
             time.sleep(1)
@@ -101,7 +108,7 @@ class RemotevLLMEngine(InferenceEngine):
                     self.addresses = wait_llm_server_addrs(
                         experiment_name=self.config.experiment_name,
                         trial_name=self.config.trial_name,
-                        timeout=1,
+                        timeout=_resolve_setup_timeout(self.config.setup_timeout),
                     )
                     self.logger.info(f"Get server addresses from name_resolve.")
                 except (TimeoutError, RuntimeError):
