@@ -195,35 +195,28 @@ def _run_learned_loki_sequence(
     seq_len = query_states.shape[0]
     output = value_states.new_zeros((seq_len, query_states.shape[1], value_states.shape[-1]))
 
+    current_projected_keys = learned_loki.project_keys(key_states)
     if prefix_keys is None or prefix_values is None:
-        live_keys = key_states.new_empty((0, key_states.shape[1], key_states.shape[2]))
-        live_values = value_states.new_empty(
-            (0, value_states.shape[1], value_states.shape[2])
-        )
-        live_projected_keys = key_states.new_empty(
-            (0, key_states.shape[1], learned_loki.low_rank_dim),
-            dtype=torch.float32,
-        )
+        all_keys = key_states
+        all_values = value_states
+        all_projected_keys = current_projected_keys
+        prefix_len = 0
     else:
-        live_keys = prefix_keys
-        live_values = prefix_values
-        live_projected_keys = learned_loki.project_keys(prefix_keys)
+        prefix_projected_keys = learned_loki.project_keys(prefix_keys)
+        all_keys = torch.cat([prefix_keys, key_states], dim=0)
+        all_values = torch.cat([prefix_values, value_states], dim=0)
+        all_projected_keys = torch.cat(
+            [prefix_projected_keys, current_projected_keys],
+            dim=0,
+        )
+        prefix_len = prefix_keys.shape[0]
 
     for token_idx in range(seq_len):
-        live_keys = torch.cat([live_keys, key_states[token_idx : token_idx + 1]], dim=0)
-        live_values = torch.cat(
-            [live_values, value_states[token_idx : token_idx + 1]],
-            dim=0,
-        )
-        live_projected_keys = torch.cat(
-            [
-                live_projected_keys,
-                learned_loki.project_keys(key_states[token_idx : token_idx + 1]),
-            ],
-            dim=0,
-        )
+        live_len = prefix_len + token_idx + 1
+        live_keys = all_keys[:live_len]
+        live_values = all_values[:live_len]
+        live_projected_keys = all_projected_keys[:live_len]
 
-        live_len = live_keys.shape[0]
         keep_sink, middle_end = _split_windows(
             live_len,
             sink_window_size=learned_loki.sink_window_size,

@@ -37,7 +37,7 @@ actor:
   path: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
   init_from_scratch: false
   disable_dropout: true
-  gradient_checkpointing: false
+  gradient_checkpointing: true
   dtype: bfloat16
   mb_spec:
     max_tokens_per_mb: 7680

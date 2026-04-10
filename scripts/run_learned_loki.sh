@@ -34,7 +34,7 @@ context_length="${LEARNED_LOKI_CONTEXT_LENGTH:-7680}"
 max_running_requests="${LEARNED_LOKI_MAX_RUNNING_REQUESTS:-128}"
 max_concurrent_rollouts="${LEARNED_LOKI_MAX_CONCURRENT_ROLLOUTS:-${train_batch_size}}"
 mem_fraction_static="${LEARNED_LOKI_MEM_FRACTION_STATIC:-0.7}"
-gradient_checkpointing="${LEARNED_LOKI_GRADIENT_CHECKPOINTING:-false}"
+gradient_checkpointing="${LEARNED_LOKI_GRADIENT_CHECKPOINTING:-true}"
 fsdp_offload_params="${LEARNED_LOKI_FSDP_OFFLOAD_PARAMS:-false}"
 
 init_path_override="++actor.learned_loki_init_path=null"
