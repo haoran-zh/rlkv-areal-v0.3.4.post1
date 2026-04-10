@@ -37,8 +37,10 @@ class StatsLogger:
             return
 
         self.start_time = time.perf_counter()
+        self._wandb_enabled = self.config.wandb.mode != "disabled"
+        self._swanlab_enabled = self.config.swanlab.mode != "disabled"
         # wandb init, connect to remote wandb host
-        if self.config.wandb.mode != "disabled":
+        if self._wandb_enabled:
             wandb.login()
 
         if self.config.wandb.wandb_base_url:
@@ -50,40 +52,41 @@ class StatsLogger:
         if suffix == "timestamp":
             suffix = time.strftime("%Y_%m_%d_%H_%M_%S")
 
-        wandb.init(
-            mode=self.config.wandb.mode,
-            entity=self.config.wandb.entity,
-            project=self.config.wandb.project or self.config.experiment_name,
-            name=self.config.wandb.name or self.config.trial_name,
-            job_type=self.config.wandb.job_type,
-            group=self.config.wandb.group
-            or f"{self.config.experiment_name}_{self.config.trial_name}",
-            notes=self.config.wandb.notes,
-            tags=self.config.wandb.tags,
-            config=self.exp_config,  # save all experiment config to wandb
-            dir=self.get_log_path(self.config),
-            force=True,
-            id=f"{self.config.experiment_name}_{self.config.trial_name}_{suffix}",
-            resume="allow",
-            settings=wandb.Settings(start_method="fork"),
-        )
+        if self._wandb_enabled:
+            wandb.init(
+                mode=self.config.wandb.mode,
+                entity=self.config.wandb.entity,
+                project=self.config.wandb.project or self.config.experiment_name,
+                name=self.config.wandb.name or self.config.trial_name,
+                job_type=self.config.wandb.job_type,
+                group=self.config.wandb.group
+                or f"{self.config.experiment_name}_{self.config.trial_name}",
+                notes=self.config.wandb.notes,
+                tags=self.config.wandb.tags,
+                config=self.exp_config,  # save all experiment config to wandb
+                dir=self.get_log_path(self.config),
+                force=True,
+                id=f"{self.config.experiment_name}_{self.config.trial_name}_{suffix}",
+                resume="allow",
+                settings=wandb.Settings(start_method="fork"),
+            )
 
         swanlab_config = self.config.swanlab
-        if swanlab_config.mode != "disabled":
+        if self._swanlab_enabled:
             if swanlab_config.api_key:
                 swanlab.login(swanlab_config.api_key)
             else:
                 swanlab.login()
 
-        swanlab_config = self.config.swanlab
-        swanlab.init(
-            project=swanlab_config.project or self.config.experiment_name,
-            experiment_name=swanlab_config.name or self.config.trial_name + "_train",
-            # NOTE: change from swanlab_config.config to log all experiment config, to be tested
-            config=self.exp_config,
-            logdir=self.get_log_path(self.config),
-            mode=swanlab_config.mode,
-        )
+        if self._swanlab_enabled:
+            swanlab.init(
+                project=swanlab_config.project or self.config.experiment_name,
+                experiment_name=swanlab_config.name or self.config.trial_name + "_train",
+                # NOTE: change from swanlab_config.config to log all experiment config, to be tested
+                config=self.exp_config,
+                logdir=self.get_log_path(self.config),
+                mode=swanlab_config.mode,
+            )
         # tensorboard logging
         self.summary_writer = None
         if self.config.tensorboard.path is not None:
@@ -103,8 +106,10 @@ class StatsLogger:
         logger.info(
             f"Training completes! Total time elapsed {time.monotonic() - self.start_time:.2f}."
         )
-        wandb.finish()
-        swanlab.finish()
+        if self._wandb_enabled:
+            wandb.finish()
+        if self._swanlab_enabled:
+            swanlab.finish()
         if self.summary_writer is not None:
             self.summary_writer.close()
 
@@ -132,8 +137,10 @@ class StatsLogger:
         for i, item in enumerate(data):
             logger.info(f"Stats ({i+1}/{len(data)}):")
             self.print_stats(item)
-            wandb.log(item, step=log_step + i)
-            swanlab.log(item, step=log_step + i)
+            if self._wandb_enabled:
+                wandb.log(item, step=log_step + i)
+            if self._swanlab_enabled:
+                swanlab.log(item, step=log_step + i)
             if self.summary_writer is not None:
                 for key, val in item.items():
                     self.summary_writer.add_scalar(f"{key}", val, log_step + i)

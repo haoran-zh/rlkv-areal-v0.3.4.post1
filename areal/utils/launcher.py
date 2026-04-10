@@ -28,6 +28,10 @@ def _resolve_local_cache_dir() -> str:
 
 LOCAL_CACHE_DIR = _resolve_local_cache_dir()
 _CACHE_USER = getpass.getuser()
+XDG_CACHE_HOME = os.getenv(
+    "XDG_CACHE_HOME",
+    f"{LOCAL_CACHE_DIR}/.cache/{_CACHE_USER}",
+)
 HF_HOME = os.getenv(
     "HF_HOME",
     f"{LOCAL_CACHE_DIR}/.cache/{_CACHE_USER}/huggingface",
@@ -70,11 +74,13 @@ PYTHONPATH = os.pathsep.join(
 os.makedirs(PYTORCH_KERNEL_CACHE_PATH, exist_ok=True)
 os.makedirs(VLLM_CACHE_ROOT, exist_ok=True)
 os.makedirs(TRITON_CACHE_PATH, exist_ok=True)
+os.makedirs(XDG_CACHE_HOME, exist_ok=True)
 os.makedirs(HF_HUB_CACHE, exist_ok=True)
 os.makedirs(TRANSFORMERS_CACHE, exist_ok=True)
 os.makedirs(HF_DATASETS_CACHE, exist_ok=True)
 BASE_ENVIRONS = {
     "TOKENIZERS_PARALLELISM": "true",
+    "XDG_CACHE_HOME": XDG_CACHE_HOME,
     "HF_HOME": HF_HOME,
     "HF_HUB_CACHE": HF_HUB_CACHE,
     "HUGGINGFACE_HUB_CACHE": HF_HUB_CACHE,
