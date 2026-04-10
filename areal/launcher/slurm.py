@@ -598,18 +598,6 @@ def slurm_main(config, run_id: int = 0):
             container_mounts=config.launcher.slurm.mount,
             env_vars=env_list,
         )
-        # Get llm server addresses by name resolve
-        try:
-            llm_addrs = wait_slurm_rollout_servers(
-                launcher,
-                config.experiment_name,
-                config.trial_name,
-                n_backend_servers,
-                timeout=_resolve_rollout_wait_timeout(),
-            )
-        except (TimeoutError, KeyboardInterrupt, JobException) as e:
-            launcher.stop_all(force=True)
-            raise e
 
     if allocation_mode.type_ == AllocationType.DECOUPLED_EVAL:
         trainer_n_nodes = 1
@@ -678,6 +666,22 @@ def slurm_main(config, run_id: int = 0):
 
     if allocation_mode.type_ != AllocationType.LLM_SERVER_ONLY and eager_submit_trainer:
         _launch_trainers()
+
+    if n_backend_servers > 0:
+        # Get llm server addresses by name resolve
+        try:
+            llm_addrs = wait_slurm_rollout_servers(
+                launcher,
+                config.experiment_name,
+                config.trial_name,
+                n_backend_servers,
+                timeout=_resolve_rollout_wait_timeout(),
+            )
+        except (TimeoutError, KeyboardInterrupt, JobException) as e:
+            launcher.stop_all(force=True)
+            raise e
+    else:
+        llm_addrs = []
 
     if allocation_mode.type_ != AllocationType.LLM_SERVER_ONLY and not eager_submit_trainer:
         # launch trainers after rollout registration
