@@ -2,6 +2,7 @@ import dataclasses
 import json
 import os
 import pickle
+import time
 from typing import TYPE_CHECKING, Dict, List
 
 import torch.distributed as dist
@@ -164,6 +165,95 @@ class RecoverHandler:
             f"recover_info",
         )
 
+    @staticmethod
+    def _recover_candidates(config: RecoverConfig) -> List[tuple[str, str, str]]:
+        candidates = [
+            (config.experiment_name, config.trial_name, config.fileroot),
+        ]
+        source_trial_name = getattr(config, "source_trial_name", None)
+        if source_trial_name:
+            source_candidate = (
+                config.source_experiment_name or config.experiment_name,
+                source_trial_name,
+                config.source_fileroot or config.fileroot,
+            )
+            if source_candidate not in candidates:
+                candidates.append(source_candidate)
+        return candidates
+
+    @staticmethod
+    def _validate_recover_root(
+        experiment_name: str,
+        trial_name: str,
+        fileroot: str,
+    ) -> bool:
+        recover_info_path = RecoverHandler.recover_info_path(
+            experiment_name,
+            trial_name,
+            fileroot,
+        )
+        if not os.path.exists(recover_info_path):
+            return False
+
+        try:
+            info = RecoverInfo.load(recover_info_path)
+        except Exception as e:
+            logger.warning(f"Failed to load recover info from {recover_info_path}: {e}")
+            return False
+
+        if info.last_step_info.epoch < 0:
+            logger.warning(
+                "Recover checkpoint is not valid. Expected last_step_info.epoch >= 0, "
+                f"but found {info.last_step_info.epoch} at {recover_info_path}."
+            )
+            return False
+
+        save_root = Saver.get_save_root(experiment_name, trial_name, fileroot)
+        for name in os.listdir(save_root):
+            if not os.path.isdir(os.path.join(save_root, name)):
+                continue
+            path = Saver.get_recover_checkpoint_path(
+                experiment_name,
+                trial_name,
+                fileroot,
+                name=name,
+            )
+            if not os.path.exists(path):
+                logger.warning(f"Recover checkpoint for model {name} does not exist.")
+                return False
+        return True
+
+    @staticmethod
+    def find_recover_root(
+        config: RecoverConfig,
+        wait_for_source: bool = False,
+    ) -> tuple[str, str, str] | None:
+        candidates = RecoverHandler._recover_candidates(config)
+        current_candidate = candidates[0]
+
+        if RecoverHandler._validate_recover_root(*current_candidate):
+            return current_candidate
+
+        if len(candidates) == 1:
+            return None
+
+        source_wait_timeout = getattr(config, "source_wait_timeout", None)
+        deadline = (
+            None
+            if not wait_for_source or source_wait_timeout is None
+            else time.time() + source_wait_timeout
+        )
+
+        while True:
+            for candidate in candidates[1:]:
+                if RecoverHandler._validate_recover_root(*candidate):
+                    return candidate
+            if not wait_for_source:
+                return None
+            if deadline is not None and time.time() > deadline:
+                return None
+            time.sleep(10)
+
     def dump(
         self,
         engine: TrainEngine | Dict[str, TrainEngine],
@@ -234,14 +324,20 @@ class RecoverHandler:
 
         if isinstance(engine, TrainEngine):
             engine = {"default": engine}
-
-        recover_info_path = self.recover_info_path(
-            self.config.experiment_name,
-            self.config.trial_name,
-            self.config.fileroot,
-        )
-        logger.info(f"Loading recover info from {recover_info_path}")
         try:
+            recover_root = self.find_recover_root(
+                self.config,
+                wait_for_source=True,
+            )
+            if recover_root is None:
+                raise FileNotFoundError("No recover checkpoint found.")
+            source_experiment_name, source_trial_name, source_fileroot = recover_root
+            recover_info_path = self.recover_info_path(
+                source_experiment_name,
+                source_trial_name,
+                source_fileroot,
+            )
+            logger.info(f"Loading recover info from {recover_info_path}")
             recover_info: RecoverInfo = RecoverInfo.load(recover_info_path)
             logger.info(f"Recovering from {recover_info.last_step_info.next()}.")
             saver.load_state_dict(recover_info.saver_info)
@@ -251,7 +347,13 @@ class RecoverHandler:
             dataloader.load_state_dict(recover_info.dataloader_info)
 
             for name, engine_ in engine.items():
-                self._load_checkpoint(engine_, name=name)
+                self._load_checkpoint(
+                    engine_,
+                    name=name,
+                    experiment_name=source_experiment_name,
+                    trial_name=source_trial_name,
+                    fileroot=source_fileroot,
+                )
             global_step = recover_info.last_step_info.global_step
 
             if inference_engine is not None:
@@ -270,8 +372,10 @@ class RecoverHandler:
                 inference_engine.set_version(global_step + 1)
             return recover_info
         except (FileNotFoundError, InValidRecoverInfo):
+            if self.config.mode == "resume":
+                raise
             logger.warning(
-                f"Resume info not found at {recover_info_path}. "
+                "Resume info not found. "
                 f"This should not be a resumed experiment!"
             )
 
@@ -306,13 +410,16 @@ class RecoverHandler:
         self,
         engine: TrainEngine,
         name: str = "default",
+        experiment_name: str | None = None,
+        trial_name: str | None = None,
+        fileroot: str | None = None,
         tokenizer: PreTrainedTokenizerFast | None = None,
         base_model_path: str | None = None,
     ):
         path = Saver.get_recover_checkpoint_path(
-            self.config.experiment_name,
-            self.config.trial_name,
-            self.config.fileroot,
+            experiment_name or self.config.experiment_name,
+            trial_name or self.config.trial_name,
+            fileroot or self.config.fileroot,
             name=name,
         )
         if not os.path.exists(path):
@@ -333,39 +440,22 @@ class RecoverHandler:
 def check_if_auto_recover(config: RecoverConfig) -> bool:
     # This method is called only by launchers to check if the experiment should be a recover run
     # when "recover_mode" is auto.
-    experiment_name = config.experiment_name
-    trial_name = config.trial_name
-    fileroot = config.fileroot
-    recover_info_path = RecoverHandler.recover_info_path(
-        experiment_name, trial_name, fileroot
-    )
-    logger.info(f"Searching for recover info file in {recover_info_path}.")
-    if os.path.exists(str(recover_info_path)):
-        try:
-            info = RecoverInfo.load(recover_info_path)
-        except Exception as e:
-            logger.warning(f"Failed to load recover info from {recover_info_path}: {e}")
-            return False
-        if info.last_step_info.epoch < 0:
-            msg = (
-                f"Recover checkpoint is not valid. "
-                f"Expected last_step_info.epoch >= 0, "
-                f"but found {info.last_step_info.epoch}"
-            )
-            logger.warning(msg)
-            return False
-
-        save_root = Saver.get_save_root(experiment_name, trial_name, fileroot)
-        for name in os.listdir(save_root):
-            if not os.path.isdir(os.path.join(save_root, name)):
-                continue
-            path = Saver.get_recover_checkpoint_path(
-                experiment_name, trial_name, fileroot, name=name
-            )
-            if not os.path.exists(path):
-                logger.warning(f"Recover checkpoint for model {name} does not exist.")
-                return False
+    recover_root = RecoverHandler.find_recover_root(config, wait_for_source=False)
+    if recover_root is not None:
+        recover_info_path = RecoverHandler.recover_info_path(*recover_root)
+        logger.info(f"Found recover info at {recover_info_path}.")
         return True
+    if getattr(config, "source_trial_name", None):
+        logger.info(
+            "No recover checkpoint is available yet, but a source trial is configured. "
+            "The trainer will wait for it at runtime."
+        )
+        return True
+    recover_info_path = RecoverHandler.recover_info_path(
+        config.experiment_name,
+        config.trial_name,
+        config.fileroot,
+    )
     logger.warning(f"Recover info not found at: {recover_info_path}")
     return False
 

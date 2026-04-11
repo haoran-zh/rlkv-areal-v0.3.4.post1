@@ -936,6 +936,30 @@ class RecoverConfig(_Timer):
         default=3,
         metadata={"help": "Number of recovery retries (auto/fault modes only)."},
     )
+    source_experiment_name: str | None = field(
+        default=None,
+        metadata={
+            "help": "Optional experiment name to recover from. Defaults to the current experiment."
+        },
+    )
+    source_trial_name: str | None = field(
+        default=None,
+        metadata={
+            "help": "Optional trial name to recover from when bootstrapping a new trial."
+        },
+    )
+    source_fileroot: str | None = field(
+        default=None,
+        metadata={
+            "help": "Optional fileroot to recover from. Defaults to the current fileroot."
+        },
+    )
+    source_wait_timeout: float | None = field(
+        default=None,
+        metadata={
+            "help": "Optional timeout in seconds to wait for a source recover checkpoint to appear."
+        },
+    )
 
 
 @dataclass
