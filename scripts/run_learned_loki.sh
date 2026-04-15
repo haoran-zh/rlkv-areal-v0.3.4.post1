@@ -16,20 +16,20 @@ budget_ratio="${LEARNED_LOKI_BUDGET_RATIO:-0.5}"
 sink_window_size="${LEARNED_LOKI_SINK_SIZE:-16}"
 recent_window_size="${LEARNED_LOKI_RECENT_SIZE:-64}"
 threshold_init="${LEARNED_LOKI_THRESHOLD_INIT:-0.0}"
-init_mode="${LEARNED_LOKI_INIT_MODE:-orthogonal}"
+init_mode="${LEARNED_LOKI_INIT_MODE:-pca}"
 init_path="${LEARNED_LOKI_INIT_PATH:-}"
 gate_temperature_init="${LEARNED_LOKI_GATE_TEMPERATURE_INIT:-1.0}"
 gate_temperature_final="${LEARNED_LOKI_GATE_TEMPERATURE_FINAL:-1.0}"
 gate_temperature_anneal_steps="${LEARNED_LOKI_GATE_TEMPERATURE_ANNEAL_STEPS:-0}"
 sparse_loss_scale="${LEARNED_LOKI_SPARSE_LOSS_SCALE:-0.1}"
-reward_scaled_sparse_loss="${LEARNED_LOKI_REWARD_SCALED_SPARSE_LOSS:-false}"
+reward_scaled_sparse_loss="${LEARNED_LOKI_REWARD_SCALED_SPARSE_LOSS:-true}"
 epochs="${LEARNED_LOKI_EPOCHS:-2}"
 lr="${LEARNED_LOKI_LR:-1e-2}"
 attn_impl="${LEARNED_LOKI_ATTN_IMPL:-flash_attention_2}"
 train_batch_size="${LEARNED_LOKI_TRAIN_BATCH_SIZE:-32}"
 valid_batch_size="${LEARNED_LOKI_VALID_BATCH_SIZE:-32}"
 max_tokens_per_mb="${LEARNED_LOKI_MAX_TOKENS_PER_MB:-7680}"
-max_new_tokens="${LEARNED_LOKI_MAX_NEW_TOKENS:-7168}"
+max_new_tokens="${LEARNED_LOKI_MAX_NEW_TOKENS:-4096}"
 context_length="${LEARNED_LOKI_CONTEXT_LENGTH:-7680}"
 max_running_requests="${LEARNED_LOKI_MAX_RUNNING_REQUESTS:-128}"
 max_concurrent_rollouts="${LEARNED_LOKI_MAX_CONCURRENT_ROLLOUTS:-${train_batch_size}}"
@@ -40,6 +40,11 @@ fsdp_offload_params="${LEARNED_LOKI_FSDP_OFFLOAD_PARAMS:-false}"
 init_path_override="++actor.learned_loki_init_path=null"
 if [ -n "${init_path}" ]; then
     init_path_override="++actor.learned_loki_init_path=${init_path}"
+fi
+
+if [ "${init_mode}" = "pca" ] && [ -z "${init_path}" ]; then
+    echo "LEARNED_LOKI_INIT_PATH must be set when LEARNED_LOKI_INIT_MODE=pca" >&2
+    exit 1
 fi
 
 python3 -m areal.launcher.local examples/math/gsm8k_grpo.py --config "${config_path}" \

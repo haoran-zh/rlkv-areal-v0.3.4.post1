@@ -89,8 +89,24 @@ def initialize_learned_loki_from_checkpoint(model, path):
             f"Model name mismatch: {model_name} vs {model.config._name_or_path}"
         )
 
+    model_state_dict = model.state_dict()
+    normalized_state_dict = {}
+    for key, value in learned_loki_state_dict.items():
+        target = model_state_dict.get(key)
+        if target is None:
+            normalized_state_dict[key] = value
+            continue
+
+        tensor = value.detach()
+        if tensor.shape != target.shape:
+            if tensor.numel() == target.numel():
+                tensor = tensor.reshape_as(target)
+            elif tensor.numel() == 1 and target.numel() == 1:
+                tensor = tensor.reshape_as(target)
+        normalized_state_dict[key] = tensor
+
     missing_keys, unexpected_keys = model.load_state_dict(
-        learned_loki_state_dict,
+        normalized_state_dict,
         strict=False,
     )
     missing_keys = [

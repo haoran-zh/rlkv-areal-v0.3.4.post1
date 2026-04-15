@@ -47,6 +47,29 @@ class PPOActor:
         self.temperature = config.temperature
         self.dynamic_sampling = config.dynamic_sampling
 
+    def _group_advantage_eps(self) -> float:
+        return self.adv_norm.eps if self.adv_norm is not None else 1e-5
+
+    def _compute_group_normalized_sequence_advantages(
+        self,
+        rewards: torch.Tensor,
+        loss_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if rewards.numel() % self.group_size != 0:
+            raise ValueError(
+                "Grouped Learned-Loki training expects batch size to be divisible "
+                f"by group_size, got {rewards.numel()} and {self.group_size}."
+            )
+
+        grouped_rewards = rewards.float().view(-1, self.group_size)
+        group_mean = grouped_rewards.mean(dim=-1, keepdim=True)
+        group_std = grouped_rewards.std(dim=-1, keepdim=True, unbiased=False)
+        seq_advantages = (
+            (grouped_rewards - group_mean) / (group_std + self._group_advantage_eps())
+        ).view(-1)
+        token_advantages = seq_advantages.unsqueeze(-1).expand_as(loss_mask) * loss_mask
+        return seq_advantages, token_advantages
+
     @torch.no_grad()
     def compute_logp(
         self,
@@ -84,14 +107,17 @@ class PPOActor:
                 max_response_length=self.config.max_new_tokens,
             )
 
-        # Reward Scaling
-        reward_score = data["rewards"]
-        reward_score = (reward_score + self.reward_bias) * self.reward_scaling
-        reward_score = torch.clip(
-            reward_score, max=self.reward_clip, min=-self.reward_clip
+        reward_score = data["rewards"].float()
+        use_grouped_sequence_advantages = bool(
+            getattr(self.config, "enable_learned_loki_training", False)
         )
-        if self.reward_norm:
-            reward_score = self.reward_norm(reward_score)
+        if not use_grouped_sequence_advantages:
+            reward_score = (reward_score + self.reward_bias) * self.reward_scaling
+            reward_score = torch.clip(
+                reward_score, max=self.reward_clip, min=-self.reward_clip
+            )
+            if self.reward_norm:
+                reward_score = self.reward_norm(reward_score)
 
         loss_mask = data["loss_mask"].float()
         loss_mask = torch.roll(loss_mask, shifts=-1, dims=-1)
@@ -107,6 +133,22 @@ class PPOActor:
         ref_logp = data.get("ref_logp", torch.zeros_like(old_logp))
         ref_logp *= loss_mask
         old_logp *= loss_mask
+
+        if use_grouped_sequence_advantages:
+            seq_advantages, advantages = self._compute_group_normalized_sequence_advantages(
+                reward_score,
+                loss_mask,
+            )
+            repeated_rewards = reward_score.unsqueeze(-1).expand_as(loss_mask) * loss_mask
+            values = data.get("values", torch.zeros_like(advantages))
+            data["returns"] = advantages + values
+            data["advantages"] = advantages
+            data["sequence_advantages"] = seq_advantages
+            data["kl_rewards"] = torch.zeros_like(advantages)
+            data["tot_rewards"] = repeated_rewards
+            data["loss_mask"] = loss_mask
+            data["logprobs"] = old_logp
+            return
 
         # Compute KL-regularized rewards.
         attn_mask = data["attention_mask"]
@@ -212,6 +254,8 @@ class PPOActor:
             prompt_len=prompt_lens.float(),
             seq_len=seqlens.float(),
         )
+        if "sequence_advantages" in data:
+            seq_stats["sequence_advantage"] = data["sequence_advantages"].float()
         stats_tracker.stat(**seq_stats, denominator="n_seqs")
         scalars = dict(
             mask_no_eos_with_zero=self.config.mask_no_eos_with_zero,

@@ -33,6 +33,15 @@ def gsm8k_reward_fn(prompt, completions, prompt_ids, completion_ids, answer, **k
     return int(process_results(completions, answer)[0])
 
 
+def _should_enable_thinking(config: GRPOConfig) -> bool:
+    model_id = " ".join(
+        x
+        for x in [config.actor.path, config.ref.path if config.ref is not None else None]
+        if x
+    ).lower()
+    return "thinking" in model_id
+
+
 def main(args):
     config, _ = load_expr_config(args, GRPOConfig)
     config: GRPOConfig
@@ -127,7 +136,7 @@ def main(args):
         reward_fn=gsm8k_reward_fn,
         gconfig=config.gconfig,
         tokenizer=tokenizer,
-        enable_thinking=False,
+        enable_thinking=_should_enable_thinking(config),
         dump_dir=os.path.join(
             StatsLogger.get_log_path(config.stats_logger), "generated"
         ),
@@ -136,7 +145,7 @@ def main(args):
         reward_fn=gsm8k_reward_fn,
         gconfig=config.gconfig.new(temperature=0.6),
         tokenizer=tokenizer,
-        enable_thinking=False,
+        enable_thinking=_should_enable_thinking(config),
         rollout_stat_scope="eval-rollout",
         dump_dir=os.path.join(
             StatsLogger.get_log_path(config.stats_logger), "generated-eval"

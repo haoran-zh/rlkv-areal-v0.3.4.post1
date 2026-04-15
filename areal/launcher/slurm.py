@@ -42,6 +42,16 @@ logger = logging.getLogger("SlurmLauncher")
 
 SLURM_WAIT_CHECK_TIME_INTERVAL = 5  # seconds
 RECOVER_TIME_INTERVAL = 10  # seconds
+SBATCH_ENV_OPTION_MAP = {
+    "SBATCH_PARTITION": "--partition",
+    "SBATCH_TIME": "--time",
+    "SBATCH_MAIL_USER": "--mail-user",
+    "SBATCH_MAIL_TYPE": "--mail-type",
+    "SBATCH_ACCOUNT": "--account",
+    "SBATCH_QOS": "--qos",
+    "SBATCH_BEGIN": "--begin",
+    "SBATCH_DEADLINE": "--deadline",
+}
 
 
 class SlurmLauncher:
@@ -150,6 +160,10 @@ class SlurmLauncher:
             f"--ntasks-per-node={ntasks_per_node}",
             f"--cpus-per-task={cpus_per_task}",
         ]
+        for env_name, opt_name in SBATCH_ENV_OPTION_MAP.items():
+            value = os.getenv(env_name)
+            if value:
+                sbatch_options.append(f"{opt_name}={value}")
         if slurm_uses_gres():
             sbatch_options.append(f"--gres=gpu:{n_gpus_per_node}")
         if slurm_uses_memory_flags():

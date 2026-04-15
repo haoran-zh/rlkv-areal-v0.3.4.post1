@@ -27,7 +27,7 @@ rollout:
 gconfig:
   n_samples: 4
   min_new_tokens: 0
-  max_new_tokens: 7168
+  max_new_tokens: 4096
   greedy: false
   temperature: 1.0
 
@@ -55,17 +55,15 @@ actor:
   group_size: ${gconfig.n_samples}
   eps_clip: 0.4
   temperature: ${gconfig.temperature}
-  reward_scaling: 10.0
-  reward_bias: -0.5
+  reward_scaling: 1.0
+  reward_bias: 0.0
   kl_ctl: 0.0
   ppo_n_minibatches: 1
   recompute_logprob: true
   use_decoupled_loss: true
   behav_imp_weight_cap: 5.0
   dynamic_sampling: false
-  adv_norm:
-    mean_level: batch
-    std_level: batch
+  adv_norm: null
   max_new_tokens: ${gconfig.max_new_tokens}
   enable_mixed_attn_training: false
   enable_semantic_kv_training: false
@@ -75,13 +73,13 @@ actor:
   learned_loki_sink_window_size: 16
   learned_loki_recent_window_size: 64
   learned_loki_threshold_init: 0.0
-  learned_loki_init_mode: orthogonal
+  learned_loki_init_mode: pca
   learned_loki_init_path: null
   learned_loki_gate_temperature_init: 1.0
   learned_loki_gate_temperature_final: 1.0
   learned_loki_gate_temperature_anneal_steps: 0
   learned_loki_sparse_loss_scale: 0.1
-  learned_loki_reward_scaled_sparse_loss: false
+  learned_loki_reward_scaled_sparse_loss: true
 
 ref:
   experiment_name: ${experiment_name}
